@@ -23,17 +23,17 @@ This project performs **real-time detection** of safety helmets and vests on ind
 
 ## 📁 Project Structure
 
-.
-├── safety_detection.py # Inference script with bounding boxes
-├── train.py # Model training using YOLOv8
-├── yolov8n.pt # Pretrained YOLOv8 model
-└── Q1/
-├── data.yaml # Dataset configuration
-└── runs/
-└── detect/
-└── vest_helmet_final/
-└── weights/
-└── best.pt # Trained model output
+
+├── safety_detection.py # Inference script with bounding boxes<br>
+├── train.py # Model training using YOLOv8<br>
+├── yolov8n.pt # Pretrained YOLOv8 model<br>
+└── Q1/<br>
+├── data.yaml # Dataset configuration<br>
+└── runs/<br>
+└── detect/<br>
+└── vest_helmet_final/<br>
+└── weights/<br>
+└── best.pt # Trained model output<br>
 
 yaml
 ---
