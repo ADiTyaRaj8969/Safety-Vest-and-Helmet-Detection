@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['No Vest', 'person_with_helmet', 'person_with_vest']
+
+roboflow:
+  workspace: aditya-b4vwo
+  project: vest-and-helmet-detection
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/aditya-b4vwo/vest-and-helmet-detection/dataset/1
