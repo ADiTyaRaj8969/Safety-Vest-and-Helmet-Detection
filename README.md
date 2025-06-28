@@ -35,9 +35,16 @@ This project performs **real-time detection** of safety helmets and vests on ind
 └── weights/<br>
 └── best.pt # Trained model output<br>
 
-yaml
+
 ---
 
+## 🔗 Connect with Me
+
+- 🔗 GitHub: [@ADiTyaRaj8969](https://github.com/ADiTyaRaj8969)  
+- ✉️ Email: adivid198986@gmail.com  
+- 💼 LinkedIn: [Aditya Raj](https://www.linkedin.com/in/aditya-raj-710a5a291/)
+
+---
 ## 📦 Installation
 
 Install required packages:
