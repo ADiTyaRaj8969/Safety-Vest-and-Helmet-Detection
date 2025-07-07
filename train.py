@@ -15,7 +15,6 @@ def train_model():
     results = model.train(
         data=DATA_YAML,
         epochs=100,
-        patience=10,  # Stop if no improvement for 10 epochs
         imgsz=640,
         batch=8,
         device="cpu",
