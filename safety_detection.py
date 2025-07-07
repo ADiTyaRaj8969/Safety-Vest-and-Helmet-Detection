@@ -2,133 +2,204 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import os
-from collections import defaultdict
+import time
 
-# Load the trained model
-MODEL_PATH = r"D:\Internship\AI GURU Internship\Final\Q1\runs\detect\vest_helmet_final\weights\best.pt"
-
-if not os.path.exists(MODEL_PATH):
-    print(f"Error: Model not found at {os.path.abspath(MODEL_PATH)}")
+# Load models
+VEST_MODEL_PATH = r"D:\Internship\AI GURU Internship\Final\Q1\runs\detect\vest_helmet_final\weights\best.pt"
+if not os.path.exists(VEST_MODEL_PATH):
+    print(f"Error: Vest model not found at {os.path.abspath(VEST_MODEL_PATH)}")
     exit()
-model = YOLO(MODEL_PATH)
 
-# Define color codes for different safety states
-COLORS = {
-    "safe": (0, 255, 0),        # Green - Both vest and helmet
-    "vest_only": (0, 255, 255),  # Yellow - Only vest
-    "helmet_only": (255, 255, 0),  # Cyan - Only helmet
-    "unsafe": (0, 0, 255)       # Red - No safety equipment
-}
+vest_model = YOLO(VEST_MODEL_PATH)
+person_model = YOLO('yolov8n.pt')  # For person detection
 
-# Define class names based on your training
-CLASS_NAMES = {
-    0: "No Vest",
-    1: "Helmet",
-    2: "Vest"
-}
+# Configuration
+DETECTION_CONFIDENCE = 0.6  # Increased confidence threshold
+PERSON_PADDING = 15  # Reduced padding
+DISPLAY_FONT = cv2.FONT_HERSHEY_SIMPLEX
+MAX_DISPLAY_WIDTH = 800  # Max width for display
 
-def get_person_status(detections):
-    """Group detections by person and determine safety status"""
-    # Group detections by person using center points
-    person_status = defaultdict(lambda: {"vest": False, "helmet": False, "boxes": []})
+# Colors
+COLOR_VEST = (0, 255, 0)      # Green
+COLOR_NO_VEST = (0, 0, 255)    # Red
+COLOR_INFO = (0, 255, 255)     # Yellow for info text
+COLOR_FPS = (255, 255, 0)      # Cyan for FPS
+COLOR_CONF = (255, 165, 0)     # Orange for confidence text
+
+class FPS_counter:
+    def __init__(self):
+        self.prev_time = 0
+        self.curr_time = 0
+        self.fps = 0
     
-    for box in detections:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        center = ((x1 + x2) // 2, (y1 + y2) // 2)
-        class_id = int(box.cls)
-        
-        # Find closest person within a reasonable distance
-        person_id = None
-        min_distance = float('inf')
-        for pid, pdata in person_status.items():
-            pcenter = pdata["center"]
-            distance = np.sqrt((center[0]-pcenter[0])**2 + (center[1]-pcenter[1])**2)
-            if distance < min_distance and distance < 100:  # 100 pixels max
-                min_distance = distance
-                person_id = pid
-        
-        # Create new person if not found
-        if person_id is None:
-            person_id = center
-            person_status[person_id] = {"vest": False, "helmet": False, "center": center, "boxes": []}
-        
-        # Update safety status
-        if class_id == 2:  # Vest
-            person_status[person_id]["vest"] = True
-        elif class_id == 1:  # Helmet
-            person_status[person_id]["helmet"] = True
-        
-        # Update center position
-        person_status[person_id]["center"] = center
-        person_status[person_id]["boxes"].append((x1, y1, x2, y2))
-    
-    return person_status
+    def update(self):
+        self.curr_time = time.time()
+        if self.prev_time > 0:  # Skip first frame
+            self.fps = 1 / (self.curr_time - self.prev_time)
+        self.prev_time = self.curr_time
+        return self.fps
 
-def draw_safety_status(frame, person_status):
-    """Draw bounding boxes and safety status on the frame"""
-    for pid, status in person_status.items():
-        # Find the largest box for this person
-        if not status["boxes"]:
+def process_frame(frame, fps_counter):
+    """Process each frame and return results"""
+    fps_counter.update()
+    
+    # Detect persons
+    person_results = person_model(frame, classes=[0], conf=DETECTION_CONFIDENCE, verbose=False)
+    person_boxes = person_results[0].boxes.xyxy.cpu().numpy().astype(int)
+    
+    vest_status = []
+    vest_count = 0
+    
+    for box in person_boxes:
+        x1, y1, x2, y2 = box
+        
+        # Create a tighter crop for vest detection
+        person_width = x2 - x1
+        person_height = y2 - y1
+        
+        # Calculate a proportional padding
+        pad_x = max(5, int(person_width * 0.05))
+        pad_y = max(5, int(person_height * 0.05))
+        
+        pad_x1 = max(0, x1 - pad_x)
+        pad_y1 = max(0, y1 - pad_y)
+        pad_x2 = min(frame.shape[1], x2 + pad_x)
+        pad_y2 = min(frame.shape[0], y2 + pad_y)
+        
+        person_crop = frame[pad_y1:pad_y2, pad_x1:pad_x2]
+        
+        # Skip very small crops (distant people)
+        if person_crop.size == 0 or min(person_crop.shape[:2]) < 20:
             continue
             
-        largest_box = max(status["boxes"], key=lambda box: (box[2]-box[0])*(box[3]-box[1]))
-        x1, y1, x2, y2 = largest_box
+        # Check for vest with increased confidence
+        vest_results = vest_model(person_crop, conf=DETECTION_CONFIDENCE, verbose=False)
+        max_vest_conf = 0.0
+        vest_box = None
         
-        # Determine safety status and color
-        if status["vest"] and status["helmet"]:
-            color = COLORS["safe"]
-            label = "SAFE: Vest+Helmet"
-        elif status["vest"]:
-            color = COLORS["vest_only"]
-            label = "PARTIAL: Vest Only"
-        elif status["helmet"]:
-            color = COLORS["helmet_only"]
-            label = "PARTIAL: Helmet Only"
-        else:
-            color = COLORS["unsafe"]
-            label = "UNSAFE: No Protection"
+        # Check only for vest class (class 2)
+        for box in vest_results[0].boxes:
+            if int(box.cls) == 2:  # Vest class
+                # Get bounding box coordinates in crop
+                vx1, vy1, vx2, vy2 = map(int, box.xyxy[0])
+                conf = float(box.conf.item())
+                
+                # Calculate vest size relative to person
+                vest_width = vx2 - vx1
+                vest_height = vy2 - vy1
+                vest_area = vest_width * vest_height
+                person_area = person_width * person_height
+                
+                # Only consider significant vest detections
+                if vest_area > 0.05 * person_area and conf > max_vest_conf:  
+                    max_vest_conf = conf
+                    vest_box = (vx1, vy1, vx2, vy2)
+        
+        has_vest = max_vest_conf > 0
+        if has_vest:
+            vest_count += 1
+        
+        vest_status.append({
+            'box': (x1, y1, x2, y2),
+            'vest': has_vest,
+            'vest_conf': max_vest_conf,
+            'vest_box': vest_box
+        })
+    
+    return vest_status, len(vest_status), vest_count, fps_counter.fps
+
+def draw_results(frame, results, total_persons, vest_count, fps):
+    """Draw all information on the frame with confidence scores"""
+    # Draw person boxes and vest status
+    for person in results:
+        x1, y1, x2, y2 = person['box']
+        color = COLOR_VEST if person['vest'] else COLOR_NO_VEST
+        label = "Vest" if person['vest'] else "No Vest"
         
         # Draw bounding box
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         
-        # Draw label background
-        cv2.rectangle(frame, (x1, y1 - 25), (x1 + len(label) * 10, y1), color, -1)
+        # Draw label background - dynamic width based on text
+        text = f"{label}: {person['vest_conf']:.2f}" if person['vest'] else label
+        text_size = cv2.getTextSize(text, DISPLAY_FONT, 0.6, 2)[0]
+        bg_width = text_size[0] + 20
+        cv2.rectangle(frame, (x1, y1-25), (x1 + bg_width, y1), color, -1)
         
-        # Draw text
-        cv2.putText(frame, label, (x1, y1 - 5), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        # Draw label text
+        text_color = (0, 0, 0)  # Black text
+        if person['vest']:
+            text = f"Vest: {person['vest_conf']:.2f}"
+            text_color = (0, 0, 0)  # Black text on green background
+        cv2.putText(frame, text, (x1+5, y1-5), DISPLAY_FONT, 0.6, text_color, 2)
+        
+        # Draw vest bounding box if detected
+        if person['vest'] and person['vest_box']:
+            vx1, vy1, vx2, vy2 = person['vest_box']
+            # Convert vest box coordinates to original frame coordinates
+            abs_vx1 = x1 - PERSON_PADDING + vx1
+            abs_vy1 = y1 - PERSON_PADDING + vy1
+            abs_vx2 = x1 - PERSON_PADDING + vx2
+            abs_vy2 = y1 - PERSON_PADDING + vy2
+            # Draw vest box
+            cv2.rectangle(frame, (abs_vx1, abs_vy1), (abs_vx2, abs_vy2), COLOR_CONF, 2)
+            # Draw confidence near vest
+            conf_text = f"{person['vest_conf']:.2f}"
+            cv2.putText(frame, conf_text, (abs_vx1, abs_vy1-5), 
+                       DISPLAY_FONT, 0.5, COLOR_CONF, 2)
+    
+    # Draw information panel
+    info_y = 30
+    line_height = 30
+    
+    # FPS counter
+    cv2.putText(frame, f"FPS: {fps:.1f}", (10, info_y), 
+               DISPLAY_FONT, 0.7, COLOR_FPS, 2)
+    info_y += line_height
+    
+    # Person count
+    cv2.putText(frame, f"Total Persons: {total_persons}", (10, info_y), 
+               DISPLAY_FONT, 0.7, COLOR_INFO, 2)
+    info_y += line_height
+    
+    # Vest count
+    cv2.putText(frame, f"With Vests: {vest_count}", (10, info_y), 
+               DISPLAY_FONT, 0.7, COLOR_VEST, 2)
+    info_y += line_height
+    
+    # No vest count
+    cv2.putText(frame, f"Without Vests: {total_persons - vest_count}", (10, info_y), 
+               DISPLAY_FONT, 0.7, COLOR_NO_VEST, 2)
     
     return frame
 
 def main():
-    # Initialize video capture
-    cap = cv2.VideoCapture(0)  # Use 0 for webcam, or path to video file
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)  # Balanced resolution
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
+    
+    fps_counter = FPS_counter()
     
     while cap.isOpened():
-        success, frame = cap.read()
-        if not success:
+        ret, frame = cap.read()
+        if not ret:
             break
         
-        # Run YOLOv8 inference
-        results = model.predict(frame, conf=0.5, device="cpu")
+        # Process frame
+        results, total_persons, vest_count, fps = process_frame(frame, fps_counter)
         
-        # Process detections
-        detections = []
-        for result in results:
-            detections.extend(result.boxes)
+        # Draw results
+        frame = draw_results(frame, results, total_persons, vest_count, fps)
         
-        # Group detections by person and determine safety status
-        person_status = get_person_status(detections)
+        # Resize for display if too wide
+        if frame.shape[1] > MAX_DISPLAY_WIDTH:
+            scale = MAX_DISPLAY_WIDTH / frame.shape[1]
+            display_frame = cv2.resize(frame, (MAX_DISPLAY_WIDTH, int(frame.shape[0] * scale)))
+        else:
+            display_frame = frame
         
-        # Draw safety status on frame
-        frame = draw_safety_status(frame, person_status)
+        # Display
+        cv2.imshow("Vest Detection System", display_frame)
         
-        # Display the annotated frame
-        cv2.imshow("Safety Vest & Helmet Detection", frame)
-        
-        # Break the loop with 'q'
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
