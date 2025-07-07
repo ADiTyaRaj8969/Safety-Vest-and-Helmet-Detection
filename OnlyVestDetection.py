@@ -3,7 +3,6 @@ import numpy as np
 from ultralytics import YOLO
 import os
 import time
-
 # Load models
 VEST_MODEL_PATH = r"D:\Internship\AI GURU Internship\Final\Q1\runs\detect\vest_helmet_final\weights\best.pt"
 if not os.path.exists(VEST_MODEL_PATH):
@@ -145,13 +144,10 @@ def main():
         ret, frame = cap.read()
         if not ret:
             break
-        
         # Process frame
         results, total_persons, vest_count, fps = process_frame(frame, fps_counter)
-        
         # Draw results
         frame = draw_results(frame, results, total_persons, vest_count, fps)
-        
         # Resize for display if too wide
         if frame.shape[1] > MAX_DISPLAY_WIDTH:
             scale = MAX_DISPLAY_WIDTH / frame.shape[1]
