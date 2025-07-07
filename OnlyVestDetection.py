@@ -15,15 +15,15 @@ person_model = YOLO('yolov8n.pt')  # For person detection
 
 # Configuration
 DETECTION_CONFIDENCE = 0.6  # Increased confidence threshold
-PERSON_PADDING = 15  # Reduced padding
 DISPLAY_FONT = cv2.FONT_HERSHEY_SIMPLEX
 MAX_DISPLAY_WIDTH = 800  # Max width for display
 
 # Colors
 COLOR_VEST = (0, 255, 0)      # Green
-COLOR_NO_VEST = (0, 0, 255)    # Red
-COLOR_INFO = (0, 255, 255)     # Yellow for info text
-COLOR_FPS = (255, 255, 0)      # Cyan for FPS
+COLOR_NO_VEST = (0, 0, 255)   # Red
+COLOR_INFO = (0, 255, 255)    # Yellow for info text
+COLOR_FPS = (255, 255, 0)     # Cyan for FPS
+COLOR_CONF = (255, 255, 255)  # White for confidence text
 
 class FPS_counter:
     def __init__(self):
@@ -52,72 +52,62 @@ def process_frame(frame, fps_counter):
     for box in person_boxes:
         x1, y1, x2, y2 = box
         
-        # Create a tighter crop for vest detection
-        person_width = x2 - x1
-        person_height = y2 - y1
-        
-        # Calculate a proportional padding
-        pad_x = max(5, int(person_width * 0.05))
-        pad_y = max(5, int(person_height * 0.05))
-        
-        pad_x1 = max(0, x1 - pad_x)
-        pad_y1 = max(0, y1 - pad_y)
-        pad_x2 = min(frame.shape[1], x2 + pad_x)
-        pad_y2 = min(frame.shape[0], y2 + pad_y)
-        
-        person_crop = frame[pad_y1:pad_y2, pad_x1:pad_x2]
+        # Create a crop for vest detection
+        person_crop = frame[y1:y2, x1:x2]
         
         # Skip very small crops (distant people)
         if person_crop.size == 0 or min(person_crop.shape[:2]) < 20:
             continue
             
-        # Check for vest with increased confidence
+        # Check for vest
         vest_results = vest_model(person_crop, conf=DETECTION_CONFIDENCE, verbose=False)
-        has_vest = False
+        max_vest_conf = 0.0
         
         # Check only for vest class (class 2)
         for box in vest_results[0].boxes:
             if int(box.cls) == 2:  # Vest class
-                # Get bounding box coordinates in crop
-                vx1, vy1, vx2, vy2 = map(int, box.xyxy[0])
-                
-                # Calculate vest size relative to person
-                vest_width = vx2 - vx1
-                vest_height = vy2 - vy1
-                vest_area = vest_width * vest_height
-                person_area = person_width * person_height
-                
-                # Only consider significant vest detections
-                if vest_area > 0.05 * person_area:  # Vest must cover at least 5% of person area
-                    has_vest = True
-                    break
+                conf = float(box.conf.item())
+                if conf > max_vest_conf:  
+                    max_vest_conf = conf
         
+        has_vest = max_vest_conf > 0
         if has_vest:
             vest_count += 1
         
         vest_status.append({
             'box': (x1, y1, x2, y2),
-            'vest': has_vest
+            'vest': has_vest,
+            'vest_conf': max_vest_conf
         })
     
     return vest_status, len(vest_status), vest_count, fps_counter.fps
 
 def draw_results(frame, results, total_persons, vest_count, fps):
-    """Draw all information on the frame"""
+    """Draw all information on the frame with single box per person"""
     # Draw person boxes and vest status
     for person in results:
         x1, y1, x2, y2 = person['box']
         color = COLOR_VEST if person['vest'] else COLOR_NO_VEST
-        label = "Vest" if person['vest'] else "No Vest"
         
-        # Draw bounding box
+        # Draw single bounding box
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         
-        # Draw label background
-        cv2.rectangle(frame, (x1, y1-25), (x1+100, y1), color, -1)
+        # Prepare status text
+        if person['vest']:
+            status_text = f"Vest: {person['vest_conf']:.2f}"
+        else:
+            status_text = "No Vest"
         
-        # Draw label text
-        cv2.putText(frame, label, (x1, y1-5), DISPLAY_FONT, 0.6, (0, 0, 0), 2)
+        # Calculate text size for background
+        text_size = cv2.getTextSize(status_text, DISPLAY_FONT, 0.6, 2)[0]
+        text_width = text_size[0] + 10
+        
+        # Draw text background
+        cv2.rectangle(frame, (x1, y1-30), (x1 + text_width, y1), color, -1)
+        
+        # Draw status text
+        cv2.putText(frame, status_text, (x1+5, y1-10), 
+                   DISPLAY_FONT, 0.6, (0, 0, 0), 2)
     
     # Draw information panel
     info_y = 30
@@ -146,7 +136,7 @@ def draw_results(frame, results, total_persons, vest_count, fps):
 
 def main():
     cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)  # Balanced resolution
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
     
     fps_counter = FPS_counter()
